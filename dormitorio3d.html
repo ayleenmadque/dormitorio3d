@@ -2,26 +2,34 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Dormitorio 3D</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { overflow:hidden; background:#1a1a2e; font-family:Arial,sans-serif; }
+  body { overflow:hidden; background:#1a1a2e; font-family:Arial,sans-serif; touch-action:none; }
   canvas { display:block; }
   #info {
-    position:absolute; top:12px; left:12px;
+    position:absolute; top:10px; left:10px;
     background:rgba(0,0,0,.65); color:#fff;
-    padding:10px 14px; border-radius:8px; font-size:13px; line-height:1.9;
-    pointer-events:none;
+    padding:8px 12px; border-radius:8px; font-size:12px; line-height:1.8;
+    pointer-events:none; max-width:calc(100vw - 20px);
   }
   #info b { color:#f0c040; }
+  @media (max-width:600px) {
+    #info { font-size:11px; padding:6px 10px; line-height:1.6; }
+  }
 </style>
 </head>
 <body>
 <div id="info">
   <b>Dormitorio 3D — Planta en L</b><br>
-  🖱 Arrastrar → rotar &nbsp;|&nbsp; Rueda → zoom<br>
-  🖱 Click derecho + arrastrar → desplazar
+  <span class="desktop">🖱 Arrastrar → rotar &nbsp;|&nbsp; Rueda → zoom &nbsp;|&nbsp; Clic der → desplazar</span>
+  <span class="mobile">👆 1 dedo → rotar &nbsp;|&nbsp; 2 dedos → zoom/desplazar</span>
 </div>
+<style>
+  .mobile { display:none; }
+  @media (pointer:coarse) { .desktop{display:none;} .mobile{display:inline;} }
+</style>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -847,6 +855,50 @@ renderer.domElement.addEventListener('wheel',e=>{
   radius=Math.max(2,Math.min(25,radius+e.deltaY*0.02));
   updateCam();
 },{passive:true});
+
+// ─── CONTROLES TÁCTILES ──────────────────────────────────────────
+let lastTouches = [];
+function getTouchDist(t){ const dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.sqrt(dx*dx+dy*dy); }
+function getTouchMid(t){ return {x:(t[0].clientX+t[1].clientX)/2, y:(t[0].clientY+t[1].clientY)/2}; }
+
+renderer.domElement.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  lastTouches = Array.from(e.touches);
+},{passive:false});
+
+renderer.domElement.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  const touches = Array.from(e.touches);
+  if(touches.length === 1 && lastTouches.length === 1){
+    // 1 dedo → rotar
+    const dx = touches[0].clientX - lastTouches[0].clientX;
+    const dy = touches[0].clientY - lastTouches[0].clientY;
+    theta -= dx * 0.007;
+    phi = Math.max(0.08, Math.min(Math.PI/2-0.04, phi + dy*0.007));
+    updateCam();
+  } else if(touches.length === 2 && lastTouches.length === 2){
+    // 2 dedos → zoom (pellizco) + paneo
+    const distNow  = getTouchDist(touches);
+    const distPrev = getTouchDist(lastTouches);
+    radius = Math.max(2, Math.min(25, radius - (distNow - distPrev) * 0.04));
+
+    const midNow  = getTouchMid(touches);
+    const midPrev = getTouchMid(lastTouches);
+    const dx = midNow.x - midPrev.x;
+    const dy = midNow.y - midPrev.y;
+    const r = new THREE.Vector3().crossVectors(
+      camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
+    target.addScaledVector(r, -dx * 0.015);
+    target.y += dy * 0.015;
+    updateCam();
+  }
+  lastTouches = touches;
+},{passive:false});
+
+renderer.domElement.addEventListener('touchend', e=>{
+  lastTouches = Array.from(e.touches);
+},{passive:false});
+
 window.addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
@@ -1004,21 +1056,42 @@ const furnitureEls = furnitureItems.map(item => {
 });
 
 // ─── LEYENDA DE MUEBLES ───────────────────────────────────────────
-const legend = document.createElement('div');
-legend.style.cssText = `
-  position:absolute; bottom:16px; right:16px;
-  background:rgba(0,0,0,.72); color:#fff;
-  font:12px Arial; padding:10px 14px;
-  border-radius:8px; line-height:1.85;
-  border:1px solid rgba(255,255,255,.15);
-  pointer-events:none; max-width:220px;
+// ─── LEYENDA COLAPSABLE ───────────────────────────────────────────
+const legendWrap = document.createElement('div');
+legendWrap.style.cssText = `position:absolute;bottom:12px;right:12px;z-index:10;`;
+
+const legendBtn = document.createElement('button');
+legendBtn.textContent = '📋 Leyenda';
+legendBtn.style.cssText = `
+  display:block; width:100%; background:rgba(230,80,30,0.92); color:#fff;
+  border:none; border-radius:8px 8px 0 0; padding:7px 14px;
+  font:bold 13px Arial; cursor:pointer; text-align:left;
 `;
-legend.innerHTML = furnitureItems.map(i =>
+
+const legendBody = document.createElement('div');
+legendBody.style.cssText = `
+  background:rgba(0,0,0,.80); color:#fff;
+  font:12px Arial; padding:8px 12px;
+  border-radius:0 0 8px 8px; line-height:1.85;
+  border:1px solid rgba(255,255,255,.15); border-top:none;
+  max-width:210px; max-height:60vh; overflow-y:auto;
+`;
+legendBody.innerHTML = furnitureItems.map(i =>
   `<span style="display:inline-block;width:20px;height:20px;background:rgba(230,80,30,0.9);
    border-radius:50%;text-align:center;line-height:20px;font-weight:bold;
    font-size:11px;margin-right:6px;vertical-align:middle;">${i.n}</span>${i.name}`
 ).join('<br>');
-document.body.appendChild(legend);
+
+let legendOpen = true;
+legendBtn.addEventListener('click', ()=>{
+  legendOpen = !legendOpen;
+  legendBody.style.display = legendOpen ? 'block' : 'none';
+  legendBtn.style.borderRadius = legendOpen ? '8px 8px 0 0' : '8px';
+});
+
+legendWrap.appendChild(legendBtn);
+legendWrap.appendChild(legendBody);
+document.body.appendChild(legendWrap);
 
 function animate(){
   requestAnimationFrame(animate);
