@@ -914,7 +914,10 @@ window.addEventListener('mousemove',e=>{
   updateCam();
 });
 renderer.domElement.addEventListener('wheel',e=>{
-  if(!insideRoom){ radius=Math.max(2,Math.min(25,radius+e.deltaY*0.02)); updateCam(); }
+  const minR = insideRoom ? 0.001 : 2;
+  const maxR = insideRoom ? 5    : 25;
+  radius = Math.max(minR, Math.min(maxR, radius + e.deltaY*0.02));
+  updateCam();
 },{passive:true});
 
 // ─── CONTROLES TÁCTILES ──────────────────────────────────────────
@@ -943,7 +946,9 @@ renderer.domElement.addEventListener('touchmove',e=>{
     updateCam();
   } else if(touches.length===2 && lastTouches.length===2){
     const distNow=getTouchDist(touches), distPrev=getTouchDist(lastTouches);
-    if(!insideRoom) radius=Math.max(2,Math.min(25,radius-(distNow-distPrev)*0.04));
+    const minR = insideRoom ? 0.001 : 2;
+    const maxR = insideRoom ? 5    : 25;
+    radius = Math.max(minR, Math.min(maxR, radius-(distNow-distPrev)*0.04));
     const midNow=getTouchMid(touches), midPrev=getTouchMid(lastTouches);
     const r=new THREE.Vector3().crossVectors(camera.getWorldDirection(new THREE.Vector3()),camera.up).normalize();
     target.addScaledVector(r,-(midNow.x-midPrev.x)*0.015);
