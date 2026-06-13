@@ -123,7 +123,7 @@ texWall.repeat.set(3,1);
 
 // ─── Materiales ─────────────────────────────────────────────────
 const mFloor  = new THREE.MeshLambertMaterial({map:texFloor, side:THREE.DoubleSide});
-const mWall   = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
+const mWall   = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide});
 const mCeil   = new THREE.MeshLambertMaterial({color:0xf8f6f2,side:THREE.DoubleSide});
 const mWoodD  = new THREE.MeshLambertMaterial({color:0x6b3f22});
 const mWoodL  = new THREE.MeshLambertMaterial({color:0xc49060});
@@ -169,7 +169,7 @@ scene.add(floor);
 // ─── PAREDES (posiciones explícitas, sin cálculo de ángulos) ────
 const wallMeshes = [];
 // Pared izquierda  P1 = long 237, de (0,0,0) a (0,RH,P1) — lisa
-const mWallSmooth = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
+const mWallSmooth = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide});
 wallMeshes.push(box(TH, RH, P1,   mWallSmooth, 0, RH/2, P1/2));
 // Pared trasera    P2 = long 331, de (0,RH,P1) a (P2,RH,P1)
 wallMeshes.push(box(P2, RH, TH,   mWall, P2/2,   RH/2, P1));
