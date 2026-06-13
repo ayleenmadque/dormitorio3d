@@ -84,31 +84,27 @@ function makeTex(res, fn){
 }
 
 const texFloor = makeTex(512, (ctx,r)=>{
-  // base gris oscuro
-  ctx.fillStyle='#3a3a3a'; ctx.fillRect(0,0,r,r);
-  // jaspeado: puntos aleatorios en distintos tonos de gris oscuro
-  const grises=['#2a2a2a','#333333','#404040','#4a4a4a','#555555','#222222','#3d3d3d'];
-  for(let i=0;i<18000;i++){
+  ctx.fillStyle='#888888'; ctx.fillRect(0,0,r,r);
+  // motas gruesas muy visibles (jaspeado)
+  for(let i=0;i<800;i++){
     const x=Math.random()*r, y=Math.random()*r;
-    const sz=Math.random()*3+0.5;
-    ctx.fillStyle=grises[Math.floor(Math.random()*grises.length)];
-    ctx.globalAlpha=0.35+Math.random()*0.5;
-    ctx.fillRect(x,y,sz,sz);
+    const sz=Math.random()*22+8;
+    const v=Math.floor(Math.random()*3);
+    ctx.fillStyle = v===0?'#ffffff': v===1?'#1a1a1a':'#cccccc';
+    ctx.globalAlpha=0.55+Math.random()*0.45;
+    ctx.beginPath(); ctx.arc(x,y,sz/2,0,Math.PI*2); ctx.fill();
   }
-  // fibras sutiles
-  ctx.globalAlpha=0.08;
-  for(let i=0;i<400;i++){
-    ctx.strokeStyle=Math.random()>0.5?'#fff':'#555';
-    ctx.lineWidth=0.5;
-    ctx.beginPath();
+  // motas medianas
+  for(let i=0;i<2000;i++){
     const x=Math.random()*r, y=Math.random()*r;
-    ctx.moveTo(x,y);
-    ctx.lineTo(x+Math.random()*8-4, y+Math.random()*8-4);
-    ctx.stroke();
+    const sz=Math.random()*10+3;
+    ctx.fillStyle=Math.random()>0.5?'#eeeeee':'#282828';
+    ctx.globalAlpha=0.4+Math.random()*0.5;
+    ctx.beginPath(); ctx.arc(x,y,sz/2,0,Math.PI*2); ctx.fill();
   }
   ctx.globalAlpha=1;
 });
-texFloor.repeat.set(4,4);
+texFloor.repeat.set(2,2);
 
 const texWall = makeTex(256,(ctx,r)=>{
   ctx.fillStyle='#f0ebe2'; ctx.fillRect(0,0,r,r);
@@ -122,7 +118,7 @@ const texWall = makeTex(256,(ctx,r)=>{
 texWall.repeat.set(3,1);
 
 // ─── Materiales ─────────────────────────────────────────────────
-const mFloor  = new THREE.MeshLambertMaterial({map:texFloor, side:THREE.DoubleSide});
+const mFloor  = new THREE.MeshBasicMaterial({map:texFloor, side:THREE.DoubleSide});
 // Textura de muro — lino gris claro
 const texWallLinen = makeTex(512,(ctx,r)=>{
   ctx.fillStyle='#e6e6ea'; ctx.fillRect(0,0,r,r);
@@ -199,6 +195,52 @@ wallMeshes.push(box(TH, RH, P5,   mWall, P4,     RH/2, P5/2));
 // Pared delantera P4=251, de (0,RH,0) a (P4,RH,0)
 wallMeshes.push(box(P4, RH, TH,   mWall, P4/2,   RH/2, 0));
 
+// ─── ARISTAS + GUARDA POLVO ──────────────────────────────────────────
+const mBlanco = new THREE.MeshBasicMaterial({color:0xffffff, side:THREE.DoubleSide});
+const aW=5*sc, gpH=8*sc, gpD=3*sc; // arista 5cm, guardapolvo 8cm alto, 3cm saliente
+
+// Columnas blancas en cada arista vertical
+function arista(x,z){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(aW,RH,aW),mBlanco);
+  m.position.set(x,RH/2,z); scene.add(m);
+}
+arista(0,  0);
+arista(0,  P1);
+arista(P2, P1);
+arista(P2, P5);
+arista(P4, P5);
+arista(P4, 0);
+
+// Guardapolvo blanco en la base de cada muro (unión piso-muro)
+function gp(x,z,w,d,rx,rz){ // x,z centro, w largo, d profundidad, rotación
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,gpH,d),mBlanco);
+  m.position.set(x,gpH/2,z); scene.add(m);
+}
+// Pared izq (x=0, largo P1, corre Z)
+gp(aW/2,      P1/2,         gpD, P1,   0, 0);
+// Pared trasera (z=P1, largo P2, corre X)
+gp(P2/2,      P1-aW/2,      P2,  gpD,  0, 0);
+// Pared der superior (x=P2, largo P3, corre Z de P5 a P1)
+gp(P2-aW/2,   P5+P3/2,      gpD, P3,   0, 0);
+// Pared paso horiz (z=P5, largo P6, corre X de P4 a P2)
+gp(P4+P6/2,   P5+aW/2,      P6,  gpD,  0, 0);
+// Pared paso vert (x=P4, largo P5, corre Z de 0 a P5)
+gp(P4-aW/2,   P5/2,         gpD, P5,   0, 0);
+// Pared delantera (z=0, largo P4, corre X)
+gp(P4/2,      aW/2,         P4,  gpD,  0, 0);
+
+// Cornisa blanca en el techo (unión muro-techo) — misma lógica que guardapolvo
+function cn(x,z,w,d){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,gpH,d),mBlanco);
+  m.position.set(x,RH-gpH/2,z); scene.add(m);
+}
+cn(aW/2,      P1/2,         gpD, P1);
+cn(P2/2,      P1-aW/2,      P2,  gpD);
+cn(P2-aW/2,   P5+P3/2,      gpD, P3);
+cn(P4+P6/2,   P5+aW/2,      P6,  gpD);
+cn(P4-aW/2,   P5/2,         gpD, P5);
+cn(P4/2,      aW/2,         P4,  gpD);
+
 const mFrameWW = new THREE.MeshLambertMaterial({color:0xeeeeee});
 const _clW=130*sc, _clX=P2-TH-_clW/2;
 // ─── VENTANA en Pared 2 (pared trasera, de piso a techo) ─────────
@@ -216,7 +258,7 @@ box(_clW, TH*0.5, TH*0.5, mFrameWW, _clX, RH*0.66, P1);
 const dW=80*sc, dH=210*sc;
 
 // ─── PUERTA en Pared 6 (escalón vertical derecho, x=P4, z de 0 a P5) ─
-const d6W=70*sc, d6H=210*sc;
+const d6W=70*sc, d6H=RH;
 // Hoja: ancho a lo largo de Z, delgada en X
 box(TH*0.4, d6H, d6W, mDoor, P4, d6H/2, P5/2);
 // Marco superior
@@ -1155,7 +1197,7 @@ const legendWrap = document.createElement('div');
 legendWrap.style.cssText = `position:absolute;bottom:12px;right:12px;z-index:10;`;
 
 const legendBtn = document.createElement('button');
-legendBtn.textContent = '📋 Leyenda';
+legendBtn.textContent = 'Leyenda';
 legendBtn.style.cssText = `
   display:block; width:100%; background:rgba(230,80,30,0.92); color:#fff;
   border:none; border-radius:8px 8px 0 0; padding:7px 14px;
@@ -1176,7 +1218,8 @@ legendBody.innerHTML = furnitureItems.map(i =>
    font-size:11px;margin-right:6px;vertical-align:middle;">${i.n}</span>${i.name}`
 ).join('<br>');
 
-let legendOpen = true;
+let legendOpen = false;
+legendBody.style.display = 'none';
 legendBtn.addEventListener('click', ()=>{
   legendOpen = !legendOpen;
   legendBody.style.display = legendOpen ? 'block' : 'none';
