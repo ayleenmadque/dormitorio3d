@@ -167,19 +167,20 @@ scene.add(floor);
 // techo removido para ver el interior
 
 // ─── PAREDES (posiciones explícitas, sin cálculo de ángulos) ────
+const wallMeshes = [];
 // Pared izquierda  P1 = long 237, de (0,0,0) a (0,RH,P1) — lisa
 const mWallSmooth = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
-box(TH, RH, P1,   mWallSmooth, 0, RH/2, P1/2);
+wallMeshes.push(box(TH, RH, P1,   mWallSmooth, 0, RH/2, P1/2));
 // Pared trasera    P2 = long 331, de (0,RH,P1) a (P2,RH,P1)
-box(P2, RH, TH,   mWall, P2/2,   RH/2, P1);
+wallMeshes.push(box(P2, RH, TH,   mWall, P2/2,   RH/2, P1));
 // Pared derecha superior P3=159, de (P2,RH,P1) a (P2,RH,P5)
-box(TH, RH, P3,   mWall, P2,     RH/2, P5+P3/2);
+wallMeshes.push(box(TH, RH, P3,   mWall, P2,     RH/2, P5+P3/2));
 // Escalón horizontal P6=80, de (P2,RH,P5) a (P4,RH,P5)
-box(P6, RH, TH,   mWall, P4+P6/2,RH/2, P5);
+wallMeshes.push(box(P6, RH, TH,   mWall, P4+P6/2,RH/2, P5));
 // Escalón vertical   P5=78, de (P4,RH,P5) a (P4,RH,0)
-box(TH, RH, P5,   mWall, P4,     RH/2, P5/2);
+wallMeshes.push(box(TH, RH, P5,   mWall, P4,     RH/2, P5/2));
 // Pared delantera P4=251, de (0,RH,0) a (P4,RH,0)
-box(P4, RH, TH,   mWall, P4/2,   RH/2, 0);
+wallMeshes.push(box(P4, RH, TH,   mWall, P4/2,   RH/2, 0));
 
 const mFrameWW = new THREE.MeshLambertMaterial({color:0xeeeeee});
 const _clW=130*sc, _clX=P2-TH-_clW/2;
@@ -831,18 +832,79 @@ function updateCam(){
 }
 updateCam();
 
-let dragging=false, rBtn=false, mx=0, my=0;
+// ─── ENTER / EXIT ROOM ───────────────────────────────────────────
+const outsideView = { theta, phi, radius, tx:target.x, ty:target.y, tz:target.z };
+let insideRoom = false;
+
+// Transición suave
+let trans = null; // null = sin transición
+function startTrans(to){
+  trans = {
+    from:{ theta, phi, radius, tx:target.x, ty:target.y, tz:target.z },
+    to, t:0
+  };
+}
+function easeOut(t){ return 1-(1-t)*(1-t)*(1-t); }
+
+function enterRoom(){
+  if(insideRoom) return;
+  insideRoom = true;
+  wallMeshes.forEach(m=>m.visible=false);
+  startTrans({ theta, phi:Math.PI/2-0.01, radius:0.001, tx:cx, ty:160*sc, tz:cz });
+  exitBtn.style.display='flex';
+}
+function exitRoom(){
+  if(!insideRoom) return;
+  insideRoom = false;
+  wallMeshes.forEach(m=>m.visible=true);
+  startTrans({ ...outsideView });
+  exitBtn.style.display='none';
+}
+
+// Botón "Salir"
+const exitBtn = document.createElement('button');
+exitBtn.textContent = '← Salir';
+exitBtn.style.cssText=`
+  display:none; position:absolute; top:12px; right:12px;
+  background:rgba(230,80,30,0.92); color:#fff; border:none;
+  border-radius:8px; padding:10px 18px; font:bold 14px Arial;
+  cursor:pointer; align-items:center; gap:6px;
+  box-shadow:0 2px 8px rgba(0,0,0,.4); z-index:20;
+  -webkit-tap-highlight-color:transparent;
+`;
+exitBtn.addEventListener('click', exitRoom);
+exitBtn.addEventListener('touchend', e=>{ e.preventDefault(); exitRoom(); });
+document.body.appendChild(exitBtn);
+
+// Raycaster para detectar clic/tap en la escena
+const raycaster = new THREE.Raycaster();
+function tryEnter(clientX, clientY){
+  if(insideRoom || trans) return;
+  const nx=(clientX/innerWidth)*2-1, ny=-(clientY/innerHeight)*2+1;
+  raycaster.setFromCamera({x:nx,y:ny}, camera);
+  const hits = raycaster.intersectObjects(scene.children, true);
+  if(hits.length > 0) enterRoom();
+}
+
+// ─── CONTROLES RATÓN ─────────────────────────────────────────────
+let dragging=false, rBtn=false, mx=0, my=0, mouseMoved=false;
 renderer.domElement.addEventListener('mousedown',e=>{
-  dragging=true; rBtn=e.button===2; mx=e.clientX; my=e.clientY;
+  dragging=true; rBtn=e.button===2; mx=e.clientX; my=e.clientY; mouseMoved=false;
 });
 renderer.domElement.addEventListener('contextmenu',e=>e.preventDefault());
-window.addEventListener('mouseup',()=>dragging=false);
+window.addEventListener('mouseup', e=>{
+  if(!mouseMoved && !rBtn) tryEnter(e.clientX, e.clientY);
+  dragging=false;
+});
 window.addEventListener('mousemove',e=>{
   if(!dragging)return;
   const dx=e.clientX-mx, dy=e.clientY-my; mx=e.clientX; my=e.clientY;
+  if(Math.abs(dx)+Math.abs(dy)>3) mouseMoved=true;
+  const phiMax = insideRoom ? Math.PI-0.05 : Math.PI/2-0.04;
+  const phiMin = insideRoom ? 0.05 : 0.08;
   if(!rBtn){
     theta -= dx*0.005;
-    phi = Math.max(0.08, Math.min(Math.PI/2-0.04, phi+dy*0.005));
+    phi = Math.max(phiMin, Math.min(phiMax, phi+dy*0.005));
   } else {
     const r=new THREE.Vector3().crossVectors(
       camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
@@ -852,51 +914,55 @@ window.addEventListener('mousemove',e=>{
   updateCam();
 });
 renderer.domElement.addEventListener('wheel',e=>{
-  radius=Math.max(2,Math.min(25,radius+e.deltaY*0.02));
-  updateCam();
+  if(!insideRoom){ radius=Math.max(2,Math.min(25,radius+e.deltaY*0.02)); updateCam(); }
 },{passive:true});
 
 // ─── CONTROLES TÁCTILES ──────────────────────────────────────────
-let lastTouches = [];
+let lastTouches=[], tapStart={x:0,y:0,t:0};
 function getTouchDist(t){ const dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.sqrt(dx*dx+dy*dy); }
 function getTouchMid(t){ return {x:(t[0].clientX+t[1].clientX)/2, y:(t[0].clientY+t[1].clientY)/2}; }
 
-renderer.domElement.addEventListener('touchstart', e=>{
+renderer.domElement.addEventListener('touchstart',e=>{
   e.preventDefault();
-  lastTouches = Array.from(e.touches);
+  lastTouches=Array.from(e.touches);
+  if(e.touches.length===1){
+    tapStart={x:e.touches[0].clientX, y:e.touches[0].clientY, t:Date.now()};
+  }
 },{passive:false});
 
-renderer.domElement.addEventListener('touchmove', e=>{
+renderer.domElement.addEventListener('touchmove',e=>{
   e.preventDefault();
-  const touches = Array.from(e.touches);
-  if(touches.length === 1 && lastTouches.length === 1){
-    // 1 dedo → rotar
-    const dx = touches[0].clientX - lastTouches[0].clientX;
-    const dy = touches[0].clientY - lastTouches[0].clientY;
-    theta -= dx * 0.007;
-    phi = Math.max(0.08, Math.min(Math.PI/2-0.04, phi + dy*0.007));
+  const touches=Array.from(e.touches);
+  const phiMax = insideRoom ? Math.PI-0.05 : Math.PI/2-0.04;
+  const phiMin = insideRoom ? 0.05 : 0.08;
+  if(touches.length===1 && lastTouches.length===1){
+    const dx=touches[0].clientX-lastTouches[0].clientX;
+    const dy=touches[0].clientY-lastTouches[0].clientY;
+    theta -= dx*0.007;
+    phi = Math.max(phiMin, Math.min(phiMax, phi+dy*0.007));
     updateCam();
-  } else if(touches.length === 2 && lastTouches.length === 2){
-    // 2 dedos → zoom (pellizco) + paneo
-    const distNow  = getTouchDist(touches);
-    const distPrev = getTouchDist(lastTouches);
-    radius = Math.max(2, Math.min(25, radius - (distNow - distPrev) * 0.04));
-
-    const midNow  = getTouchMid(touches);
-    const midPrev = getTouchMid(lastTouches);
-    const dx = midNow.x - midPrev.x;
-    const dy = midNow.y - midPrev.y;
-    const r = new THREE.Vector3().crossVectors(
-      camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
-    target.addScaledVector(r, -dx * 0.015);
-    target.y += dy * 0.015;
+  } else if(touches.length===2 && lastTouches.length===2){
+    const distNow=getTouchDist(touches), distPrev=getTouchDist(lastTouches);
+    if(!insideRoom) radius=Math.max(2,Math.min(25,radius-(distNow-distPrev)*0.04));
+    const midNow=getTouchMid(touches), midPrev=getTouchMid(lastTouches);
+    const r=new THREE.Vector3().crossVectors(camera.getWorldDirection(new THREE.Vector3()),camera.up).normalize();
+    target.addScaledVector(r,-(midNow.x-midPrev.x)*0.015);
+    target.y += (midNow.y-midPrev.y)*0.015;
     updateCam();
   }
-  lastTouches = touches;
+  lastTouches=touches;
 },{passive:false});
 
-renderer.domElement.addEventListener('touchend', e=>{
-  lastTouches = Array.from(e.touches);
+renderer.domElement.addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(e.changedTouches.length===1 && lastTouches.length===1){
+    const dx=e.changedTouches[0].clientX-tapStart.x;
+    const dy=e.changedTouches[0].clientY-tapStart.y;
+    if(Math.sqrt(dx*dx+dy*dy)<12 && Date.now()-tapStart.t<300){
+      tryEnter(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+    }
+  }
+  lastTouches=Array.from(e.touches);
 },{passive:false});
 
 window.addEventListener('resize',()=>{
@@ -1095,6 +1161,21 @@ document.body.appendChild(legendWrap);
 
 function animate(){
   requestAnimationFrame(animate);
+  // Transición suave de cámara
+  if(trans){
+    trans.t = Math.min(1, trans.t + 0.035);
+    const k = easeOut(trans.t);
+    theta  = trans.from.theta  + (trans.to.theta  - trans.from.theta)  * k;
+    phi    = trans.from.phi    + (trans.to.phi    - trans.from.phi)    * k;
+    radius = trans.from.radius + (trans.to.radius - trans.from.radius) * k;
+    target.set(
+      trans.from.tx + (trans.to.tx - trans.from.tx) * k,
+      trans.from.ty + (trans.to.ty - trans.from.ty) * k,
+      trans.from.tz + (trans.to.tz - trans.from.tz) * k
+    );
+    updateCam();
+    if(trans.t >= 1) trans = null;
+  }
   renderer.render(scene,camera);
   updateLabels();
   furnitureEls.forEach(({el, pos}) => {
