@@ -123,7 +123,24 @@ texWall.repeat.set(3,1);
 
 // ─── Materiales ─────────────────────────────────────────────────
 const mFloor  = new THREE.MeshLambertMaterial({map:texFloor, side:THREE.DoubleSide});
-const mWall   = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
+// Textura de muro — lino gris claro
+const texWallLinen = makeTex(512,(ctx,r)=>{
+  ctx.fillStyle='#e6e6ea'; ctx.fillRect(0,0,r,r);
+  for(let i=0;i<6000;i++){
+    const x=Math.random()*r, y=Math.random()*r;
+    ctx.strokeStyle=`rgba(${160+Math.random()*40},${160+Math.random()*40},${168+Math.random()*30},${0.08+Math.random()*0.12})`;
+    ctx.lineWidth=Math.random()*1.2+0.3;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.random()*12-6,y+Math.random()*2-1); ctx.stroke();
+  }
+  for(let i=0;i<3000;i++){
+    const x=Math.random()*r, y=Math.random()*r;
+    ctx.strokeStyle=`rgba(${150+Math.random()*40},${150+Math.random()*40},${158+Math.random()*30},${0.05+Math.random()*0.08})`;
+    ctx.lineWidth=Math.random()*0.8+0.2;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.random()*2-1,y+Math.random()*12-6); ctx.stroke();
+  }
+});
+texWallLinen.repeat.set(3,2);
+const mWall   = new THREE.MeshLambertMaterial({map:texWallLinen, side:THREE.BackSide, transparent:true, opacity:0.6});
 const mCeil   = new THREE.MeshLambertMaterial({color:0xf8f6f2,side:THREE.DoubleSide});
 const mWoodD  = new THREE.MeshLambertMaterial({color:0x6b3f22});
 const mWoodL  = new THREE.MeshLambertMaterial({color:0xc49060});
@@ -169,7 +186,7 @@ scene.add(floor);
 // ─── PAREDES (posiciones explícitas, sin cálculo de ángulos) ────
 const wallMeshes = [];
 // Pared izquierda  P1 = long 237, de (0,0,0) a (0,RH,P1) — lisa
-const mWallSmooth = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
+const mWallSmooth = new THREE.MeshLambertMaterial({map:texWallLinen, side:THREE.BackSide, transparent:true, opacity:0.6});
 wallMeshes.push(box(TH, RH, P1,   mWallSmooth, 0, RH/2, P1/2));
 // Pared trasera    P2 = long 331, de (0,RH,P1) a (P2,RH,P1)
 wallMeshes.push(box(P2, RH, TH,   mWall, P2/2,   RH/2, P1));
@@ -851,7 +868,7 @@ function enterRoom(){
   insideRoom = true;
   wallMeshes.forEach(m=>m.visible=false);
   grid.visible = false;
-  scene.background = new THREE.Color(0xf5f5f5);
+  scene.background = new THREE.Color(0xe6e6ea);
   scene.fog = null;
   startTrans({ theta, phi:Math.PI/2-0.01, radius:0.001, tx:cx, ty:160*sc, tz:cz });
   exitBtn.style.display='flex';
