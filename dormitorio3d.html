@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Dormitorio 3D</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { overflow:hidden; background:#1a1a2e; font-family:Arial,sans-serif; }
+  canvas { display:block; }
+  #info {
+    position:absolute; top:12px; left:12px;
+    background:rgba(0,0,0,.65); color:#fff;
+    padding:10px 14px; border-radius:8px; font-size:13px; line-height:1.9;
+    pointer-events:none;
+  }
+  #info b { color:#f0c040; }
+</style>
+</head>
+<body>
+<div id="info">
+  <b>Dormitorio 3D — Planta en L</b><br>
+  🖱 Arrastrar → rotar &nbsp;|&nbsp; Rueda → zoom<br>
+  🖱 Click derecho + arrastrar → desplazar
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ════════════════════════════════════════════════════════════════
+// Medidas del plano (cm convertidos a unidades de escena /30)
+// P1=331 P2=237 P3=251 P4=159 P5=80 P6=78
+// Verificación L-shape: P3+P5=251+80=331=P1 ✓  P4+P6=159+78=237=P2 ✓
+// ════════════════════════════════════════════════════════════════
+const sc = 1/30;
+const P1=331*sc, P2=237*sc, P3=251*sc, P4=159*sc, P5=80*sc, P6=78*sc;
+const RH=260*sc;   // altura de techo (~2.6 m)
+const TH=15*sc;    // grosor de pared
+
+// Vértices del L (x, z) desde arriba:
+//  A(0,0) — F(P4,0) — E(P4,P5) — D(P2,P5) — C(P2,P1) — B(0,P1) — A
+const cx=P2/2, cz=P1/2;   // centro del cuarto
+
+// ─── Scene ──────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 25, 60);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.01, 100);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// ─── Luces ──────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xfff0e0, 1.0));
+
+const sun = new THREE.DirectionalLight(0xfff0cc, 0.3);
+sun.position.set(15, 20, 10);
+sun.castShadow = false;
+scene.add(sun);
+
+// luz central de habitación
+const roomLight = new THREE.PointLight(0xfff5e0, 0.8, 20);
+roomLight.position.set(cx, RH*0.85, cz);
+scene.add(roomLight);
+
+// ─── Texturas ───────────────────────────────────────────────────
+function makeTex(res, fn){
+  const c=document.createElement('canvas'); c.width=c.height=res;
+  fn(c.getContext('2d'), res);
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  return t;
+}
+
+const texFloor = makeTex(512, (ctx,r)=>{
+  // base gris oscuro
+  ctx.fillStyle='#3a3a3a'; ctx.fillRect(0,0,r,r);
+  // jaspeado: puntos aleatorios en distintos tonos de gris oscuro
+  const grises=['#2a2a2a','#333333','#404040','#4a4a4a','#555555','#222222','#3d3d3d'];
+  for(let i=0;i<18000;i++){
+    const x=Math.random()*r, y=Math.random()*r;
+    const sz=Math.random()*3+0.5;
+    ctx.fillStyle=grises[Math.floor(Math.random()*grises.length)];
+    ctx.globalAlpha=0.35+Math.random()*0.5;
+    ctx.fillRect(x,y,sz,sz);
+  }
+  // fibras sutiles
+  ctx.globalAlpha=0.08;
+  for(let i=0;i<400;i++){
+    ctx.strokeStyle=Math.random()>0.5?'#fff':'#555';
+    ctx.lineWidth=0.5;
+    ctx.beginPath();
+    const x=Math.random()*r, y=Math.random()*r;
+    ctx.moveTo(x,y);
+    ctx.lineTo(x+Math.random()*8-4, y+Math.random()*8-4);
+    ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+});
+texFloor.repeat.set(4,4);
+
+const texWall = makeTex(256,(ctx,r)=>{
+  ctx.fillStyle='#f0ebe2'; ctx.fillRect(0,0,r,r);
+  ctx.globalAlpha=0.04;
+  for(let i=0;i<600;i++){
+    ctx.fillStyle='#888';
+    ctx.fillRect(Math.random()*r,Math.random()*r,Math.random()*3+1,Math.random()*3+1);
+  }
+  ctx.globalAlpha=1;
+});
+texWall.repeat.set(3,1);
+
+// ─── Materiales ─────────────────────────────────────────────────
+const mFloor  = new THREE.MeshLambertMaterial({map:texFloor, side:THREE.DoubleSide});
+const mWall   = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
+const mCeil   = new THREE.MeshLambertMaterial({color:0xf8f6f2,side:THREE.DoubleSide});
+const mWoodD  = new THREE.MeshLambertMaterial({color:0x6b3f22});
+const mWoodL  = new THREE.MeshLambertMaterial({color:0xc49060});
+const mBed    = new THREE.MeshLambertMaterial({color:0xe8e0d0});
+const mBlanket= new THREE.MeshLambertMaterial({color:0x3a5a8a});
+const mPillow = new THREE.MeshLambertMaterial({color:0xfafafa});
+const mMetal  = new THREE.MeshLambertMaterial({color:0xaaaaaa});
+const mDesk   = new THREE.MeshLambertMaterial({color:0xd4a060});
+const mChair  = new THREE.MeshLambertMaterial({color:0x333333});
+const mRug    = new THREE.MeshLambertMaterial({color:0x6a3060});
+const mShade  = new THREE.MeshLambertMaterial({color:0xf5f0e0,emissive:0xffee88,emissiveIntensity:0.5});
+const mWin    = new THREE.MeshLambertMaterial({color:0x88ccff,transparent:true,opacity:0.35,side:THREE.DoubleSide});
+const mDoor   = new THREE.MeshLambertMaterial({color:0x9a6030});
+const mCloset = new THREE.MeshLambertMaterial({color:0x7a5030});
+
+// ─── box helper ─────────────────────────────────────────────────
+function box(w,h,d,mat,x,y,z){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(x,y,z);
+  m.castShadow=m.receiveShadow=true;
+  scene.add(m); return m;
+}
+
+// ─── PISO ───────────────────────────────────────────────────────
+const shape = new THREE.Shape();
+// L-shape (x, z) — en Three.js la ShapeGeometry se usa en el plano XY
+// luego rotamos -90° en X para que quede en el suelo (XZ)
+shape.moveTo(0,  0 );
+shape.lineTo(P4, 0 );
+shape.lineTo(P4, P5);
+shape.lineTo(P2, P5);
+shape.lineTo(P2, P1);
+shape.lineTo(0,  P1);
+shape.closePath();
+
+const floor = new THREE.Mesh(new THREE.ShapeGeometry(shape), mFloor);
+floor.rotation.x = Math.PI/2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// techo removido para ver el interior
+
+// ─── PAREDES (posiciones explícitas, sin cálculo de ángulos) ────
+// Pared izquierda  P1 = long 237, de (0,0,0) a (0,RH,P1) — lisa
+const mWallSmooth = new THREE.MeshLambertMaterial({color:0xffffff, side:THREE.BackSide, transparent:true, opacity:0.35});
+box(TH, RH, P1,   mWallSmooth, 0, RH/2, P1/2);
+// Pared trasera    P2 = long 331, de (0,RH,P1) a (P2,RH,P1)
+box(P2, RH, TH,   mWall, P2/2,   RH/2, P1);
+// Pared derecha superior P3=159, de (P2,RH,P1) a (P2,RH,P5)
+box(TH, RH, P3,   mWall, P2,     RH/2, P5+P3/2);
+// Escalón horizontal P6=80, de (P2,RH,P5) a (P4,RH,P5)
+box(P6, RH, TH,   mWall, P4+P6/2,RH/2, P5);
+// Escalón vertical   P5=78, de (P4,RH,P5) a (P4,RH,0)
+box(TH, RH, P5,   mWall, P4,     RH/2, P5/2);
+// Pared delantera P4=251, de (0,RH,0) a (P4,RH,0)
+box(P4, RH, TH,   mWall, P4/2,   RH/2, 0);
+
+const mFrameWW = new THREE.MeshLambertMaterial({color:0xeeeeee});
+const _clW=130*sc, _clX=P2-TH-_clW/2;
+// ─── VENTANA en Pared 2 (pared trasera, de piso a techo) ─────────
+const mWinBig = new THREE.MeshLambertMaterial({
+  color:0xc8e8ff, transparent:true, opacity:0.12, side:THREE.DoubleSide
+});
+box(_clW, RH, TH*0.3, mWinBig, _clX, RH/2, P1);
+box(_clW, TH*0.6, TH*0.6, mFrameWW, _clX, 0,    P1);
+box(_clW, TH*0.6, TH*0.6, mFrameWW, _clX, RH,   P1);
+box(TH*0.6, RH, TH*0.6, mFrameWW, _clX-_clW/2, RH/2, P1);
+box(TH*0.6, RH, TH*0.6, mFrameWW, _clX+_clW/2, RH/2, P1);
+box(_clW, TH*0.5, TH*0.5, mFrameWW, _clX, RH*0.33, P1);
+box(_clW, TH*0.5, TH*0.5, mFrameWW, _clX, RH*0.66, P1);
+
+const dW=80*sc, dH=210*sc;
+
+// ─── PUERTA en Pared 6 (escalón vertical derecho, x=P4, z de 0 a P5) ─
+const d6W=70*sc, d6H=210*sc;
+// Hoja: ancho a lo largo de Z, delgada en X
+box(TH*0.4, d6H, d6W, mDoor, P4, d6H/2, P5/2);
+// Marco superior
+box(TH*0.5, TH*0.5, d6W+TH, mFrameWW, P4, d6H, P5/2);
+// Marco laterales (en Z)
+box(TH*0.5, d6H, TH*0.5, mFrameWW, P4, d6H/2, P5/2-d6W/2);
+box(TH*0.5, d6H, TH*0.5, mFrameWW, P4, d6H/2, P5/2+d6W/2);
+// Manija
+box(1*sc, 3*sc, TH*0.4, mMetal, P4+TH*0.3, d6H*0.5, P5/2-d6W/2+5*sc);
+
+// ─── CLOSET (80cm ancho × 60cm prof, piso a techo) en esquina P1-P4 ─
+// puertas mirando hacia P2 (cara frontal en +Z)
+{
+  const clsW = 80*sc;   // ancho a lo largo de X (paralelo a P4)
+  const clsD = 60*sc;   // profundidad en Z (desde P4 hacia P2)
+  const mClsCuerpo = new THREE.MeshLambertMaterial({color:0xd4c4a0});
+  const mClsPuerta = new THREE.MeshLambertMaterial({color:0xc0b090});
+  const mClsMarco  = new THREE.MeshLambertMaterial({color:0x8a6a40});
+
+  // Cuerpo principal (contra P1 en x=0, contra P4 en z=0)
+  const clsX = TH/2 + clsW/2;
+  const clsZ = TH/2 + clsD/2;
+  box(clsW, RH, clsD, mClsCuerpo, clsX, RH/2, clsZ);
+
+  // Puertas corredizas — cara frontal en z = TH/2 + clsD, mirando hacia P2
+  const doorH = RH - 4*sc;
+  const panW  = clsW/2 - 1*sc;
+  box(panW, doorH, 2*sc, mClsPuerta, TH/2+1*sc+panW/2,    doorH/2+2*sc, TH/2+clsD);
+  box(panW, doorH, 2*sc, mClsPuerta, TH/2+clsW/2+panW/2,  doorH/2+2*sc, TH/2+clsD);
+
+  // Marco superior e inferior
+  box(clsW, 3*sc, 2*sc, mClsMarco, clsX, RH-1.5*sc, TH/2+clsD);
+  box(clsW, 3*sc, 2*sc, mClsMarco, clsX, 1.5*sc,    TH/2+clsD);
+
+  // Riel central entre puertas
+  box(1.5*sc, doorH, 2*sc, mClsMarco, TH/2+clsW/2, doorH/2+2*sc, TH/2+clsD);
+}
+
+// ─── BAÚL (tapa madera, cuerpo blanco) contra P3, al lado de la cama ─
+{
+  const bW=80*sc, bH=45*sc, bD=30*sc, bt=2.5*sc;
+  const mBaul  = new THREE.MeshLambertMaterial({color:0xf0f0ee}); // cuerpo blanco
+  const mTapa  = new THREE.MeshLambertMaterial({color:0xd4a96a}); // tapa madera pino
+  const mPanel = new THREE.MeshLambertMaterial({color:0xe8e8e6}); // panel rehundido
+
+  const cnW=105*sc;
+  const bx = P2 - TH/2 - bD/2;                  // contra P3
+  const bz = P1 - TH/2 - cnW/2;                  // mismo Z que el centro de la cama
+  const by = bH/2;
+
+  // Cuerpo principal
+  box(bD, bH, bW, mBaul, bx, by, bz);
+
+  // Panel frontal rehundido (cara hacia -X)
+  box(bt*0.3, bH-bt*4, bW-bt*4, mPanel, bx-bD/2+bt*0.2, by, bz);
+
+  // Marco del panel (4 listones)
+  box(bt*0.5, bH-bt*3, bt, mBaul, bx-bD/2+bt*0.3, by, bz-bW/2+bt*2);   // izq
+  box(bt*0.5, bH-bt*3, bt, mBaul, bx-bD/2+bt*0.3, by, bz+bW/2-bt*2);   // der
+  box(bt*0.5, bt, bW-bt*4, mBaul, bx-bD/2+bt*0.3, by+bH/2-bt*2, bz);   // top
+  box(bt*0.5, bt, bW-bt*4, mBaul, bx-bD/2+bt*0.3, by-bH/2+bt*2, bz);   // bot
+
+  // Tapa de madera (ligeramente más grande)
+  box(bD+bt, bt*1.5, bW+bt, mTapa, bx, bH+bt*0.75, bz);
+
+  // Pequeñas patas
+  [[-bW/2+bt*1.5, -bD/2+bt],[bW/2-bt*1.5, -bD/2+bt],
+   [-bW/2+bt*1.5,  bD/2-bt],[bW/2-bt*1.5,  bD/2-bt]].forEach(([oz,ox])=>{
+    box(bt, bt*2, bt, mBaul, bx+ox, bt, bz+oz);
+  });
+}
+
+// ─── LÁMPARA DE ESCRITORIO (estilo IKEA Aröd, verde) sobre KALLAX ─
+{
+  const KW=77*sc, KH=77*sc, KD=39*sc;
+  const lx = TH/2 + KD/2;
+  const lz = P1 - TH/2 - 105*sc - KW/2;
+  const base = KH + 0.5*sc;
+
+  const mGreen = new THREE.MeshLambertMaterial({color:0x5a8870});
+  const mGold  = new THREE.MeshLambertMaterial({color:0xb8921a});
+  const mInner = new THREE.MeshLambertMaterial({color:0xf8f0e0, emissive:0xffeecc, emissiveIntensity:0.5});
+
+  // Base circular plana
+  const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(6*sc, 7*sc, 3*sc, 16), mGreen);
+  baseDisc.position.set(lx, base+1.5*sc, lz);
+  scene.add(baseDisc);
+
+  // Borde inferior base (aro oscuro)
+  const baseRim = new THREE.Mesh(new THREE.CylinderGeometry(7*sc, 7*sc, 1*sc, 16), new THREE.MeshLambertMaterial({color:0x222222}));
+  baseRim.position.set(lx, base+0.5*sc, lz);
+  scene.add(baseRim);
+
+  // Vástago vertical
+  box(2*sc, 22*sc, 2*sc, mGreen, lx, base+3*sc+11*sc, lz);
+
+  // Articulación dorada superior del vástago
+  const joint1 = new THREE.Mesh(new THREE.SphereGeometry(2.8*sc, 10, 10), mGold);
+  joint1.position.set(lx, base+25*sc, lz);
+  scene.add(joint1);
+
+  // Brazo — segmento 1: sube en diagonal hacia +X
+  const arm1 = new THREE.Mesh(new THREE.BoxGeometry(18*sc, 2*sc, 2*sc), mGreen);
+  arm1.position.set(lx + 7*sc, base + 28.5*sc, lz);
+  arm1.rotation.z = -Math.PI * 0.20;
+  scene.add(arm1);
+
+  // Brazo — segmento 2: arquea horizontalmente
+  const arm2 = new THREE.Mesh(new THREE.BoxGeometry(12*sc, 2*sc, 2*sc), mGreen);
+  arm2.position.set(lx + 17*sc, base + 33*sc, lz);
+  arm2.rotation.z = Math.PI * 0.08;
+  scene.add(arm2);
+
+  // Articulación dorada en punta del brazo
+  const joint2 = new THREE.Mesh(new THREE.SphereGeometry(2.8*sc, 10, 10), mGold);
+  joint2.position.set(lx + 23*sc, base + 32*sc, lz);
+  scene.add(joint2);
+
+  // Pantalla (cúpula/campana) — cuerpo exterior verde
+  const shade = new THREE.Mesh(new THREE.CylinderGeometry(3.5*sc, 7*sc, 8*sc, 14, 1, true), mGreen);
+  shade.position.set(lx + 23*sc, base + 27*sc, lz);
+  shade.rotation.z = 0.25;
+  scene.add(shade);
+
+  // Tapa superior de la pantalla
+  const shadeCap = new THREE.Mesh(new THREE.CylinderGeometry(3.5*sc, 3.5*sc, 1*sc, 14), mGreen);
+  shadeCap.position.set(lx + 23.5*sc, base + 31.2*sc, lz);
+  shadeCap.rotation.z = 0.25;
+  scene.add(shadeCap);
+
+  // Interior blanco de la pantalla (emisivo)
+  const shadeIn = new THREE.Mesh(new THREE.CylinderGeometry(3*sc, 6.5*sc, 7*sc, 14, 1, true), mInner);
+  shadeIn.position.set(lx + 23*sc, base + 27.2*sc, lz);
+  shadeIn.rotation.z = 0.25;
+  scene.add(shadeIn);
+
+  // Punto de luz cálido bajo la pantalla
+  const lampLight = new THREE.PointLight(0xfff5e0, 1.0, 4.5);
+  lampLight.position.set(lx + 24*sc, base + 24*sc, lz);
+  scene.add(lampLight);
+}
+
+// ─── KALLAX 2×2 contra P1, al lado del pie de la cama ───────────
+{
+  const KW=77*sc, KH=77*sc, KD=39*sc, kt=2*sc;
+  const mKal  = new THREE.MeshLambertMaterial({color:0x1a1612});
+  const mKDoor= new THREE.MeshLambertMaterial({color:0x141210});
+  const mKnob = new THREE.MeshLambertMaterial({color:0xcccccc});
+
+  // contra P1 (x=0), justo debajo del pie de la cama en Z
+  const cnW=105*sc, cnL=190*sc;
+  const kx = TH/2 + KD/2;
+  const kz = P1 - TH/2 - cnW - KW/2;  // tocando el pie de la cama
+  const ky = KH/2;
+
+  // Paneles exteriores
+  box(KD, kt, KW, mKal, kx, KH-kt/2,       kz); // tapa
+  box(KD, kt, KW, mKal, kx, kt/2,           kz); // base
+  box(KD, KH, kt, mKal, kx, ky, kz-KW/2+kt/2); // lado izq
+  box(KD, KH, kt, mKal, kx, ky, kz+KW/2-kt/2); // lado der
+  box(kt, KH, KW, mKal, kx-KD/2+kt/2, ky,  kz); // fondo (contra P1)
+
+  // Estante medio horizontal
+  box(KD, kt, KW, mKal, kx, KH/2, kz);
+  // Divisor vertical central
+  box(KD, KH, kt, mKal, kx, ky,   kz);
+
+  // Puertas en los 2 cuadros inferiores (cara frontal en +X, hacia el cuarto)
+  const dpW = KW/2 - kt*2, dpH = KH/2 - kt*2;
+  box(kt*1.5, dpH, dpW, mKDoor, kx+KD/2-kt, kt+dpH/2, kz-KW/4);
+  box(kt*1.5, dpH, dpW, mKDoor, kx+KD/2-kt, kt+dpH/2, kz+KW/4);
+
+  // Pomos metálicos
+  box(kt, kt, kt, mKnob, kx+KD/2, kt+dpH*0.5, kz-KW/4+dpW/2-3*sc);
+  box(kt, kt, kt, mKnob, kx+KD/2, kt+dpH*0.5, kz+KW/4-dpW/2+3*sc);
+}
+
+// ─── ESCRITORIO 100×48cm entre P6 y P3 (contra muro P3 derecho) ──
+{
+  const dskL = 100*sc;  // largo a lo largo de Z (paralelo a P3)
+  const dskD =  48*sc;  // profundidad en X (desde P3 hacia interior)
+  const dskH =  75*sc;  // altura estándar escritorio
+  const legT =  3*sc;   // grosor de patas
+  const topT =  3*sc;   // grosor del tablero
+
+  const mDskTop  = new THREE.MeshLambertMaterial({color:0x3a3a3a}); // gris oscuro
+  const mDskMeta = new THREE.MeshLambertMaterial({color:0x252525}); // metal casi negro
+  const mDskCaj  = new THREE.MeshLambertMaterial({color:0x404040}); // cajones
+
+  // Centro del escritorio
+  const dX = P2 - TH/2 - dskD/2;       // pegado a P3 (x=P2)
+  const dZ = P5 + dskL/2 + 2*sc;       // arranca en P6 con pequeño margen
+
+  // Tablero
+  box(dskD, topT, dskL, mDskTop, dX, dskH, dZ);
+
+  // Cajón izquierdo
+  box(dskD*0.85, 12*sc, dskL/2-2*sc, mDskCaj, dX-dskD*0.03, dskH-8*sc, dZ-dskL/4);
+  // Tirador cajón izq
+  box(dskD*0.3, 2*sc, 2*sc, mDskMeta, dX-dskD*0.4, dskH-8*sc, dZ-dskL/4);
+
+  // Cajón derecho
+  box(dskD*0.85, 12*sc, dskL/2-2*sc, mDskCaj, dX-dskD*0.03, dskH-8*sc, dZ+dskL/4);
+  // Tirador cajón der
+  box(dskD*0.3, 2*sc, 2*sc, mDskMeta, dX-dskD*0.4, dskH-8*sc, dZ+dskL/4);
+
+  // 4 patas metálicas
+  const pX1 = dX-dskD/2+legT/2+1*sc;
+  const pX2 = dX+dskD/2-legT/2-1*sc;
+  const pZ1 = dZ-dskL/2+legT/2+1*sc;
+  const pZ2 = dZ+dskL/2-legT/2-1*sc;
+  const legH = dskH - topT;
+  [pX1,pX2].forEach(px => [pZ1,pZ2].forEach(pz => {
+    box(legT, legH, legT, mDskMeta, px, legH/2, pz);
+  }));
+  // Travesaño frontal (inferior)
+  box(dskD - legT*2 - 2*sc, legT, legT, mDskMeta, dX, 12*sc, dZ-dskL/2+legT/2+1*sc);
+  box(dskD - legT*2 - 2*sc, legT, legT, mDskMeta, dX, 12*sc, dZ+dskL/2-legT/2-1*sc);
+}
+
+// ─── SILLA DE ESCRITORIO (estilo Markus) ────────────────────────
+{
+  const dskL = 100*sc, dskD = 48*sc;
+  const dX = P2 - TH/2 - dskD/2;
+  const dZ = P5 + dskL/2 + 2*sc;
+
+  // silla parcialmente bajo el escritorio
+  const chX = P2 - TH/2 - dskD - 2*sc;
+  const chZ = dZ;
+
+  const mSeat  = new THREE.MeshLambertMaterial({color:0x111111});
+  const mMesh  = new THREE.MeshLambertMaterial({color:0x0d0d0d, transparent:true, opacity:0.85});
+  const mBlack = new THREE.MeshLambertMaterial({color:0x0a0a0a});
+
+  // Asiento (silla mira hacia +X = P3)
+  box(50*sc, 8*sc, 50*sc, mSeat, chX, 46*sc, chZ);
+
+  // Respaldo alto — detrás del asiento en -X
+  box(6*sc, 65*sc, 48*sc, mMesh, chX-25*sc+3*sc, 46*sc+8*sc+65*sc/2, chZ);
+
+  // Reposacabezas
+  box(5*sc, 12*sc, 28*sc, mSeat, chX-25*sc+3*sc, 46*sc+8*sc+65*sc+6*sc, chZ);
+
+  // Apoyabrazos izq / der (a los lados en Z)
+  box(28*sc, 4*sc, 5*sc, mBlack, chX, 46*sc+12*sc, chZ-27*sc);
+  box(28*sc, 4*sc, 5*sc, mBlack, chX, 46*sc+12*sc, chZ+27*sc);
+  // soporte vertical apoyabrazos
+  box(4*sc, 18*sc, 4*sc, mBlack, chX-10*sc, 46*sc+4*sc, chZ-27*sc);
+  box(4*sc, 18*sc, 4*sc, mBlack, chX-10*sc, 46*sc+4*sc, chZ+27*sc);
+
+  // Columna neumática central
+  box(8*sc, 46*sc, 8*sc, mBlack, chX, 23*sc, chZ);
+
+  // Base estrella (5 brazos aproximados con 2 cajas cruzadas + radio)
+  box(55*sc, 4*sc, 10*sc, mBlack, chX, 3*sc, chZ);
+  box(10*sc, 4*sc, 55*sc, mBlack, chX, 3*sc, chZ);
+  box(40*sc, 4*sc, 10*sc, mBlack, chX, 3*sc, chZ+10*sc);
+  box(40*sc, 4*sc, 10*sc, mBlack, chX, 3*sc, chZ-10*sc);
+
+  // Ruedas (5 ruedas pequeñas)
+  const rad = 24*sc;
+  const wMat = new THREE.MeshLambertMaterial({color:0x111111});
+  [[rad,0],[- rad,0],[0,rad],[0,-rad],[rad*0.7,rad*0.7]].forEach(([ox,oz])=>{
+    box(6*sc, 5*sc, 6*sc, wMat, chX+ox, 1.5*sc, chZ+oz);
+  });
+}
+
+// ─── REPISA FLOTANTE en muro P1 ─────────────────────────────────
+{
+  const shL=160*sc, shD=20*sc, shT=4*sc;
+  const mShelf = new THREE.MeshLambertMaterial({color:0x1a1a1a}); // negro mate
+  const shX = TH/2 + shD/2;
+  const shZ = P1/2 + 30*sc;  // 30cm a la izquierda del centro de P1
+  const shY = 155*sc;         // ~155cm del suelo
+
+  // Tablero de la repisa
+  box(shD, shT, shL, mShelf, shX, shY, shZ);
+  // Soporte/bracket izq y der (pequeños triángulos simulados como cajas)
+  box(shD*0.6, shT*2, shT, mShelf, shX-shD*0.2, shY-shT, shZ-shL/2+4*sc);
+  box(shD*0.6, shT*2, shT, mShelf, shX-shD*0.2, shY-shT, shZ+shL/2-4*sc);
+
+  // Divisiones verticales — 3 divisores, 4 secciones iguales de ~37cm
+  const divH = 18*sc, divT = shT;
+  [-shL*0.25, 0, shL*0.25].forEach(dz => {
+    box(shD*0.85, divH, divT, mShelf, shX, shY+shT/2+divH/2, shZ+dz);
+  });
+  // Centros de sección (bien alejados de los divisores)
+  const s1=shZ-shL*0.375, s2=shZ-shL*0.125, s3=shZ+shL*0.125, s4=shZ+shL*0.375;
+
+  // 2 dinosaurios por sección, escala pequeña para que no toquen los divisores
+
+  // Dinosaurios de juguete sobre la repisa
+  function dinoTrex(bx,bz,col){
+    const m=new THREE.MeshLambertMaterial({color:col});
+    const by=shY+shT/2;
+    box(5*sc,4*sc,7*sc,m,bx,by+4*sc,bz);          // cuerpo
+    box(3*sc,3*sc,3*sc,m,bx,by+7.5*sc,bz+4*sc);   // cabeza
+    box(1.5*sc,1*sc,4*sc,m,bx,by+5*sc,bz-4.5*sc); // cola
+    box(1.5*sc,5*sc,1.5*sc,m,bx-1*sc,by+1.5*sc,bz+1*sc); // pata izq
+    box(1.5*sc,5*sc,1.5*sc,m,bx+1*sc,by+1.5*sc,bz+1*sc); // pata der
+    box(1*sc,1.5*sc,2*sc,m,bx,by+7*sc,bz+5.5*sc); // hocico
+  }
+  function dinoLong(bx,bz,col){
+    const m=new THREE.MeshLambertMaterial({color:col});
+    const by=shY+shT/2;
+    box(4*sc,3.5*sc,8*sc,m,bx,by+3.5*sc,bz);      // cuerpo
+    box(1.5*sc,8*sc,1.5*sc,m,bx,by+9*sc,bz+3*sc); // cuello
+    box(2.5*sc,2*sc,3*sc,m,bx,by+13.5*sc,bz+4*sc);// cabeza
+    box(1.5*sc,1*sc,5*sc,m,bx,by+2*sc,bz-5*sc);   // cola
+    [-1,1].forEach(sx=>[-2,2].forEach(sz=>{
+      box(1.5*sc,4*sc,1.5*sc,m,bx+sx*sc,by+1.5*sc,bz+sz*sc); // patas
+    }));
+  }
+  function dinoTricera(bx,bz,col){
+    const m=new THREE.MeshLambertMaterial({color:col});
+    const by=shY+shT/2;
+    box(5*sc,4*sc,7*sc,m,bx,by+3.5*sc,bz);        // cuerpo
+    box(4*sc,3.5*sc,4*sc,m,bx,by+5*sc,bz+5*sc);   // cabeza
+    box(1*sc,3*sc,0.5*sc,m,bx,by+8*sc,bz+6.5*sc); // cuerno central
+    box(0.8*sc,2*sc,0.5*sc,m,bx-1.5*sc,by+7.5*sc,bz+6.5*sc); // cuerno izq
+    box(0.8*sc,2*sc,0.5*sc,m,bx+1.5*sc,by+7.5*sc,bz+6.5*sc); // cuerno der
+    box(3*sc,2*sc,2*sc,m,bx,by+5.5*sc,bz+4*sc);   // collar
+    box(1.5*sc,1*sc,3*sc,m,bx,by+2*sc,bz-4.5*sc); // cola
+    [-1,1].forEach(sx=>[-2,2].forEach(sz=>{
+      box(1.5*sc,4*sc,1.5*sc,m,bx+sx*sc,by+1.5*sc,bz+sz*sc);
+    }));
+  }
+  function dinoStego(bx,bz,col){
+    const m=new THREE.MeshLambertMaterial({color:col});
+    const by=shY+shT/2;
+    box(4*sc,5*sc,7*sc,m,bx,by+4*sc,bz);
+    box(2.5*sc,2.5*sc,3*sc,m,bx,by+4*sc,bz+5*sc); // cabeza baja
+    box(1*sc,1*sc,4*sc,m,bx,by+2*sc,bz-4.5*sc);   // cola
+    [[-2,1],[0,2],[2,1]].forEach(([dz,h])=>{ // placas dorsales
+      box(0.8*sc,h*2*sc,1*sc,m,bx,by+7*sc+h*sc,bz+dz*sc);
+    });
+    [-1,1].forEach(sx=>[-2,2].forEach(sz=>{
+      box(1.5*sc,4*sc,1.5*sc,m,bx+sx*sc,by+1.5*sc,bz+sz*sc);
+    }));
+  }
+
+  // 10 dinosaurios de distintos tamaños a lo largo de toda la repisa
+  // Escala variable para simular distintos tamaños de juguete
+
+  // función wrapper que escala los dinos internamente
+  function scaledTrex(bx,bz,col,s){
+    const m=new THREE.MeshLambertMaterial({color:col}), by=shY+shT/2;
+    box(5*sc*s,4*sc*s,7*sc*s,m,bx,by+4*sc*s,bz);
+    box(3*sc*s,3*sc*s,3*sc*s,m,bx,by+7.5*sc*s,bz+4*sc*s);
+    box(1.5*sc*s,1*sc*s,4*sc*s,m,bx,by+5*sc*s,bz-4.5*sc*s);
+    box(1.5*sc*s,5*sc*s,1.5*sc*s,m,bx-1*sc*s,by+1.5*sc*s,bz+1*sc*s);
+    box(1.5*sc*s,5*sc*s,1.5*sc*s,m,bx+1*sc*s,by+1.5*sc*s,bz+1*sc*s);
+    box(1*sc*s,1.5*sc*s,2*sc*s,m,bx,by+7*sc*s,bz+5.5*sc*s);
+  }
+  function scaledLong(bx,bz,col,s){
+    const m=new THREE.MeshLambertMaterial({color:col}), by=shY+shT/2;
+    box(4*sc*s,3.5*sc*s,8*sc*s,m,bx,by+3.5*sc*s,bz);
+    box(1.5*sc*s,8*sc*s,1.5*sc*s,m,bx,by+9*sc*s,bz+3*sc*s);
+    box(2.5*sc*s,2*sc*s,3*sc*s,m,bx,by+13.5*sc*s,bz+4*sc*s);
+    box(1.5*sc*s,1*sc*s,5*sc*s,m,bx,by+2*sc*s,bz-5*sc*s);
+    [-1,1].forEach(sx=>[-2,2].forEach(sz=>{
+      box(1.5*sc*s,4*sc*s,1.5*sc*s,m,bx+sx*sc*s,by+1.5*sc*s,bz+sz*sc*s);
+    }));
+  }
+  function scaledTricera(bx,bz,col,s){
+    const m=new THREE.MeshLambertMaterial({color:col}), by=shY+shT/2;
+    box(5*sc*s,4*sc*s,7*sc*s,m,bx,by+3.5*sc*s,bz);
+    box(4*sc*s,3.5*sc*s,4*sc*s,m,bx,by+5*sc*s,bz+5*sc*s);
+    box(1*sc*s,3*sc*s,0.5*sc*s,m,bx,by+8*sc*s,bz+6.5*sc*s);
+    box(0.8*sc*s,2*sc*s,0.5*sc*s,m,bx-1.5*sc*s,by+7.5*sc*s,bz+6.5*sc*s);
+    box(0.8*sc*s,2*sc*s,0.5*sc*s,m,bx+1.5*sc*s,by+7.5*sc*s,bz+6.5*sc*s);
+    box(3*sc*s,2*sc*s,2*sc*s,m,bx,by+5.5*sc*s,bz+4*sc*s);
+    box(1.5*sc*s,1*sc*s,3*sc*s,m,bx,by+2*sc*s,bz-4.5*sc*s);
+    [-1,1].forEach(sx=>[-2,2].forEach(sz=>{
+      box(1.5*sc*s,4*sc*s,1.5*sc*s,m,bx+sx*sc*s,by+1.5*sc*s,bz+sz*sc*s);
+    }));
+  }
+  function scaledStego(bx,bz,col,s){
+    const m=new THREE.MeshLambertMaterial({color:col}), by=shY+shT/2;
+    box(4*sc*s,5*sc*s,7*sc*s,m,bx,by+4*sc*s,bz);
+    box(2.5*sc*s,2.5*sc*s,3*sc*s,m,bx,by+4*sc*s,bz+5*sc*s);
+    box(1*sc*s,1*sc*s,4*sc*s,m,bx,by+2*sc*s,bz-4.5*sc*s);
+    [[-2,1],[0,2],[2,1]].forEach(([dz,h])=>{
+      box(0.8*sc*s,h*2*sc*s,1*sc*s,m,bx,by+7*sc*s+h*sc*s,bz+dz*sc*s);
+    });
+    [-1,1].forEach(sx=>[-2,2].forEach(sz=>{
+      box(1.5*sc*s,4*sc*s,1.5*sc*s,m,bx+sx*sc*s,by+1.5*sc*s,bz+sz*sc*s);
+    }));
+  }
+
+  // Sección 1 — centro s1, escala 0.65 max (dino ocupa ~9cm, sección 37cm)
+  scaledTrex   (shX, s1-6*sc, 0xe85520, 0.6);
+  scaledStego  (shX, s1+6*sc, 0x8844cc, 0.65);
+  // Sección 2
+  scaledLong   (shX, s2-5*sc, 0x44aaaa, 0.6);
+  scaledTricera(shX, s2+6*sc, 0x2d8a2d, 0.65);
+  // Sección 3
+  scaledTrex   (shX, s3-6*sc, 0x1a5fa0, 0.65);
+  scaledLong   (shX, s3+5*sc, 0xcc4422, 0.6);
+  // Sección 4
+  scaledStego  (shX, s4-6*sc, 0xcc8800, 0.6);
+  scaledTricera(shX, s4+5*sc, 0xaa2288, 0.65);
+}
+
+// ─── TV LED 40" en muro P3 ──────────────────────────────────────
+{
+  const tvW=89*sc, tvH=50*sc, tvD=6*sc, bezel=2*sc;
+  const mTVMarco  = new THREE.MeshLambertMaterial({color:0x111111});
+  const mTVScreen = new THREE.MeshLambertMaterial({color:0x050a14, emissive:0x0a1428, emissiveIntensity:0.4});
+  const mTVMont   = new THREE.MeshLambertMaterial({color:0x1a1a1a});
+
+  // Centrado en P3 (z=P5+P3/2), a 110cm del suelo al centro
+  const tvX = P2 - TH/2 - tvD/2;
+  const tvZ = P5 + P3/2;
+  const tvY = 110*sc + tvH/2;
+
+  // Marco/bezel negro
+  box(tvD, tvH+bezel*2, tvW+bezel*2, mTVMarco, tvX, tvY, tvZ);
+  // Pantalla
+  box(tvD*0.3, tvH, tvW, mTVScreen, tvX-tvD/2, tvY, tvZ);
+
+  // Soporte de pared (brazo)
+  box(tvD+2*sc, 8*sc, 12*sc, mTVMont, tvX+tvD/2+1*sc, tvY, tvZ);
+  // Fijación en muro
+  box(2*sc, 14*sc, 20*sc, mTVMont, P2-TH/2+1*sc, tvY, tvZ);
+}
+
+// ─── CAMA CIC 1.5 plaza (105×190cm) contra P2 ───────────────────
+const cnW=105*sc, cnL=190*sc;
+const cnX=TH/2+cnL/2;
+const cnZ=P1-TH/2-cnW/2;
+
+const mBase    = new THREE.MeshLambertMaterial({color:0x0a0a0a}); // base negra
+const mColchon = new THREE.MeshLambertMaterial({color:0xf5f5f5}); // colchón blanco
+const mBorde   = new THREE.MeshLambertMaterial({color:0x12122a}); // borde azul marino
+const mPata    = new THREE.MeshLambertMaterial({color:0x222222}); // patas oscuras
+
+// Base (box spring) negra — 30cm alto
+box(cnL, 30*sc, cnW, mBase, cnX, 15*sc, cnZ);
+// Franja decorativa en borde de base
+box(cnL+0.5*sc, 3*sc, cnW+0.5*sc, mBorde, cnX, 28*sc, cnZ);
+
+// Colchón blanco — 22cm alto sobre la base
+box(cnL-2*sc, 22*sc, cnW-2*sc, mColchon, cnX, 30*sc+11*sc, cnZ);
+// Borde oscuro del colchón (franja perimetral)
+box(cnL, 4*sc, cnW, mBorde, cnX, 30*sc+2*sc, cnZ);
+box(cnL, 4*sc, cnW, mBorde, cnX, 30*sc+20*sc, cnZ);
+
+// Patas en las 4 esquinas
+const px1=cnX-cnL/2+3*sc, px2=cnX+cnL/2-3*sc;
+const pz1=cnZ-cnW/2+3*sc, pz2=cnZ+cnW/2-3*sc;
+[[px1,pz1],[px2,pz1],[px1,pz2],[px2,pz2]].forEach(([px,pz])=>{
+  box(3*sc, 6*sc, 3*sc, mPata, px, 3*sc, pz);
+});
+
+// Frazada dinosaurios (textura procedural)
+{
+  const tc = document.createElement('canvas'); tc.width=512; tc.height=256;
+  const tx = tc.getContext('2d');
+  // Fondo azul marino
+  tx.fillStyle='#0d1530'; tx.fillRect(0,0,512,256);
+
+  tx.strokeStyle='#39ff6a'; tx.lineWidth=2.5; tx.lineJoin='round'; tx.lineCap='round';
+
+  function trex(x,y,s){
+    tx.save(); tx.translate(x,y); tx.scale(s,s);
+    tx.beginPath();
+    // cuerpo
+    tx.moveTo(0,0); tx.lineTo(30,0); tx.lineTo(35,-8); tx.lineTo(20,-12); tx.lineTo(5,-10); tx.closePath(); tx.stroke();
+    // cabeza
+    tx.beginPath(); tx.moveTo(32,-8); tx.lineTo(50,-10); tx.lineTo(54,-5); tx.lineTo(50,0); tx.lineTo(36,0); tx.closePath(); tx.stroke();
+    // cola
+    tx.beginPath(); tx.moveTo(0,0); tx.lineTo(-18,4); tx.lineTo(-22,2); tx.stroke();
+    // pata trasera
+    tx.beginPath(); tx.moveTo(5,0); tx.lineTo(3,12); tx.lineTo(0,18); tx.stroke();
+    tx.beginPath(); tx.moveTo(12,0); tx.lineTo(10,12); tx.lineTo(8,18); tx.stroke();
+    // bracito
+    tx.beginPath(); tx.moveTo(28,-8); tx.lineTo(32,-4); tx.lineTo(30,0); tx.stroke();
+    tx.restore();
+  }
+
+  function longneck(x,y,s){
+    tx.save(); tx.translate(x,y); tx.scale(s,s);
+    tx.beginPath();
+    // cuerpo oval
+    tx.ellipse(0,0,30,12,0,0,Math.PI*2); tx.stroke();
+    // cuello y cabeza
+    tx.beginPath(); tx.moveTo(22,-8); tx.quadraticCurveTo(30,-30,24,-42); tx.stroke();
+    tx.beginPath(); tx.ellipse(22,-44,7,4,0.3,0,Math.PI*2); tx.stroke();
+    // cola
+    tx.beginPath(); tx.moveTo(-28,2); tx.quadraticCurveTo(-42,8,-48,4); tx.stroke();
+    // patas
+    [[-15,12],[-5,12],[8,12],[18,12]].forEach(([px,py])=>{
+      tx.beginPath(); tx.moveTo(px,py-12); tx.lineTo(px,py+5); tx.stroke();
+    });
+    tx.restore();
+  }
+
+  function tricera(x,y,s){
+    tx.save(); tx.translate(x,y); tx.scale(s,s);
+    tx.beginPath(); tx.ellipse(0,0,28,14,0,0,Math.PI*2); tx.stroke();
+    // cabeza con cuernos
+    tx.beginPath(); tx.moveTo(24,-6); tx.lineTo(44,-8); tx.lineTo(48,0); tx.lineTo(40,6); tx.lineTo(26,4); tx.closePath(); tx.stroke();
+    tx.beginPath(); tx.moveTo(40,-8); tx.lineTo(44,-20); tx.stroke(); // cuerno
+    tx.beginPath(); tx.moveTo(36,-10); tx.lineTo(38,-22); tx.stroke();
+    tx.beginPath(); tx.moveTo(44,0); tx.lineTo(50,0); tx.stroke();
+    // collar
+    tx.beginPath(); tx.arc(30,-2,12,Math.PI*0.8,Math.PI*1.6); tx.stroke();
+    [[-18,14],[-6,14],[8,14],[20,14]].forEach(([px,py])=>{
+      tx.beginPath(); tx.moveTo(px,py-14); tx.lineTo(px,py+4); tx.stroke();
+    });
+    tx.restore();
+  }
+
+  // Distribuir dinosaurios en el canvas
+  trex(60,60,0.9);   trex(280,40,1.0);  trex(430,130,0.85);
+  longneck(160,80,0.8); longneck(360,110,0.9); longneck(50,180,0.75);
+  tricera(240,160,0.85); tricera(420,50,0.8);  tricera(130,190,0.9);
+  trex(320,200,0.8); longneck(460,200,0.7);
+
+  const texDino = new THREE.CanvasTexture(tc);
+  texDino.repeat.set(2,1); texDino.wrapS=texDino.wrapT=THREE.RepeatWrapping;
+  const mDino = new THREE.MeshLambertMaterial({map:texDino, side:THREE.DoubleSide});
+  box(cnL-2*sc, 4*sc, cnW-2*sc, mDino, cnX, 30*sc+22*sc+2*sc, cnZ);
+}
+
+// ─── ALMOHADAS con diseño de dinosaurios ────────────────────────
+{
+  // Textura: fondo blanco, dinosaurios coloridos estilo cartoon
+  const tc = document.createElement('canvas'); tc.width=256; tc.height=192;
+  const tx = tc.getContext('2d');
+  tx.fillStyle='#ffffff'; tx.fillRect(0,0,256,192);
+
+  function filledTrex(tx,x,y,s,col){
+    tx.fillStyle=col;
+    tx.save(); tx.translate(x,y); tx.scale(s,s);
+    // cuerpo
+    tx.beginPath(); tx.ellipse(0,0,18,10,0,0,Math.PI*2); tx.fill();
+    // cabeza
+    tx.beginPath(); tx.ellipse(22,-8,10,7,0.3,0,Math.PI*2); tx.fill();
+    // hocico
+    tx.beginPath(); tx.ellipse(30,-6,6,4,0,0,Math.PI*2); tx.fill();
+    // cola
+    tx.beginPath(); tx.moveTo(-18,0); tx.lineTo(-30,5); tx.lineTo(-24,-2); tx.closePath(); tx.fill();
+    // patas
+    tx.fillRect(-8,8,5,12); tx.fillRect(2,8,5,12);
+    // ojito
+    tx.fillStyle='#fff'; tx.beginPath(); tx.arc(25,-10,2.5,0,Math.PI*2); tx.fill();
+    tx.fillStyle='#222'; tx.beginPath(); tx.arc(26,-10,1.2,0,Math.PI*2); tx.fill();
+    tx.restore();
+  }
+  function filledLong(tx,x,y,s,col){
+    tx.fillStyle=col;
+    tx.save(); tx.translate(x,y); tx.scale(s,s);
+    tx.beginPath(); tx.ellipse(0,0,22,10,0,0,Math.PI*2); tx.fill();
+    // cuello
+    tx.beginPath(); tx.moveTo(14,-8); tx.lineTo(18,-30); tx.lineTo(22,-28); tx.lineTo(18,-6); tx.closePath(); tx.fill();
+    // cabeza
+    tx.beginPath(); tx.ellipse(20,-33,7,5,0.3,0,Math.PI*2); tx.fill();
+    // cola
+    tx.beginPath(); tx.moveTo(-22,2); tx.lineTo(-34,6); tx.lineTo(-28,-2); tx.closePath(); tx.fill();
+    [-12,-4,4,14].forEach(px=>{ tx.fillRect(px,8,4,13); });
+    tx.restore();
+  }
+  function filledStego(tx,x,y,s,col){
+    tx.fillStyle=col;
+    tx.save(); tx.translate(x,y); tx.scale(s,s);
+    tx.beginPath(); tx.ellipse(0,0,20,10,0,0,Math.PI*2); tx.fill();
+    tx.beginPath(); tx.ellipse(22,-5,8,6,0,0,Math.PI*2); tx.fill();
+    tx.fillStyle='#6dbf6d';
+    [[-8,-12],[0,-16],[8,-12]].forEach(([px,py])=>{
+      tx.beginPath(); tx.moveTo(px-3,py+8); tx.lineTo(px,py); tx.lineTo(px+3,py+8); tx.closePath(); tx.fill();
+    });
+    tx.fillStyle=col;
+    [-10,-2,8,16].forEach(px=>{ tx.fillRect(px,8,4,13); });
+    tx.restore();
+  }
+
+  // Hojas decorativas
+  tx.fillStyle='#7dc47d';
+  [[30,160],[80,20],[130,170],[180,25],[220,150],[250,80]].forEach(([lx,ly])=>{
+    tx.beginPath(); tx.ellipse(lx,ly,8,14,-0.4,0,Math.PI*2); tx.fill();
+  });
+
+  // Dinosaurios distribuidos
+  filledTrex (tx, 45,  90, 0.85, '#e8562a');   // naranja
+  filledLong (tx, 140, 100, 0.75, '#4a9a7a');  // verde azulado
+  filledStego(tx, 210, 85, 0.8,  '#e8a030');   // amarillo-naranja
+  filledTrex (tx, 60,  160, 0.65,'#3a8ac8');   // azul
+  filledLong (tx, 190, 155, 0.65,'#cc4444');   // rojo
+
+  const texAlm = new THREE.CanvasTexture(tc);
+  texAlm.wrapS = texAlm.wrapT = THREE.RepeatWrapping;
+  const mAlm = new THREE.MeshLambertMaterial({map:texAlm});
+
+  // Almohadas apiladas en el extremo P1 de la cama (lado izquierdo, x bajo)
+  const almH = 10*sc, almW = 35*sc, almD = cnW - 6*sc;
+  const baseY = 30*sc + 22*sc + 4*sc; // encima del colchón + frazada
+  const almX  = cnX - cnL/2 + almW/2 + 2*sc; // pegado al lado P1
+  box(almW, almH, almD, mAlm, almX, baseY + almH/2,          cnZ);
+  box(almW, almH, almD, mAlm, almX, baseY + almH*1.5 + 1*sc, cnZ);
+}
+
+// ─── LÁMPARA DE TECHO ────────────────────────────────────────────
+const clpSph=new THREE.Mesh(new THREE.SphereGeometry(12*sc,16,16),
+  new THREE.MeshLambertMaterial({color:0xffffee,emissive:0xffffcc,emissiveIntensity:0.7}));
+clpSph.position.set(cx, RH-14*sc, cz); scene.add(clpSph);
+const clpLight=new THREE.PointLight(0xfff5e0,0.9,15);
+clpLight.position.set(cx,RH-0.15,cz); scene.add(clpLight);
+
+// ═══════════════════════════════════════════════════════════════
+//  CÁMARA ORBITAL
+// ═══════════════════════════════════════════════════════════════
+// Cámara fija desde esquina exterior mirando al interior
+const target = new THREE.Vector3(cx, RH*0.25, cz);
+camera.position.set(P2*1.1, RH*0.75, -P1*0.5);
+camera.lookAt(target);
+
+let theta = Math.atan2(camera.position.x - target.x, camera.position.z - target.z);
+let phi   = Math.acos((camera.position.y - target.y) / camera.position.distanceTo(target));
+let radius = camera.position.distanceTo(target);
+
+function updateCam(){
+  camera.position.set(
+    target.x + radius*Math.sin(phi)*Math.sin(theta),
+    target.y + radius*Math.cos(phi),
+    target.z + radius*Math.sin(phi)*Math.cos(theta)
+  );
+  camera.lookAt(target);
+}
+updateCam();
+
+let dragging=false, rBtn=false, mx=0, my=0;
+renderer.domElement.addEventListener('mousedown',e=>{
+  dragging=true; rBtn=e.button===2; mx=e.clientX; my=e.clientY;
+});
+renderer.domElement.addEventListener('contextmenu',e=>e.preventDefault());
+window.addEventListener('mouseup',()=>dragging=false);
+window.addEventListener('mousemove',e=>{
+  if(!dragging)return;
+  const dx=e.clientX-mx, dy=e.clientY-my; mx=e.clientX; my=e.clientY;
+  if(!rBtn){
+    theta -= dx*0.005;
+    phi = Math.max(0.08, Math.min(Math.PI/2-0.04, phi+dy*0.005));
+  } else {
+    const r=new THREE.Vector3().crossVectors(
+      camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
+    target.addScaledVector(r,-dx*0.012);
+    target.y += dy*0.012;
+  }
+  updateCam();
+});
+renderer.domElement.addEventListener('wheel',e=>{
+  radius=Math.max(2,Math.min(25,radius+e.deltaY*0.02));
+  updateCam();
+},{passive:true});
+window.addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+// ─── REGLAS (rulers) fuera de P1 y P2 ───────────────────────────
+const mRuler = new THREE.MeshBasicMaterial({color:0x222222,side:THREE.DoubleSide});
+const yR = 0.015;   // altura sobre el piso
+const rGap = 0.55;  // separación del muro
+const rTk  = 0.018; // grosor de la barra
+
+const rulerLabelData = [];
+
+function makeRuler(totalCm, axis, fixedCoord) {
+  const total = totalCm * sc;
+  if (axis === 'z') {
+    // barra principal a lo largo de Z
+    box(rTk, rTk, total, mRuler, fixedCoord, yR, total/2);
+    for (let cm = 0; cm <= totalCm; cm += 10) {
+      const z = cm * sc;
+      const maj = (cm % 100 === 0 || cm === totalCm);
+      const mid = (cm %  50 === 0);
+      const tL  = maj ? 0.28 : mid ? 0.18 : 0.10;
+      box(tL, rTk, rTk, mRuler, fixedCoord - tL/2, yR, z);
+      if (mid || cm === totalCm) {
+        rulerLabelData.push({
+          text: cm + '',
+          pos: new THREE.Vector3(fixedCoord - tL - 0.18, yR, z)
+        });
+      }
+    }
+  } else {
+    // barra principal a lo largo de X
+    box(total, rTk, rTk, mRuler, total/2, yR, fixedCoord);
+    for (let cm = 0; cm <= totalCm; cm += 10) {
+      const x = cm * sc;
+      const maj = (cm % 100 === 0 || cm === totalCm);
+      const mid = (cm %  50 === 0);
+      const tL  = maj ? 0.28 : mid ? 0.18 : 0.10;
+      box(rTk, rTk, tL, mRuler, x, yR, fixedCoord + tL/2);
+      if (mid || cm === totalCm) {
+        rulerLabelData.push({
+          text: cm + '',
+          pos: new THREE.Vector3(x, yR, fixedCoord + tL + 0.18)
+        });
+      }
+    }
+  }
+}
+
+makeRuler(331, 'z', -(TH/2 + rGap)); // Regla P1 (izquierda, 331cm)
+makeRuler(237, 'x', P1 + TH/2 + rGap); // Regla P2 (fondo, 237cm)
+
+// ─── GRID en el piso ─────────────────────────────────────────────
+const grid = new THREE.GridHelper(Math.max(P2,P1)*1.5, 20, 0x888888, 0xcccccc);
+grid.position.set(P2/2, 0.01, P1/2);
+grid.material.opacity = 0.3;
+grid.material.transparent = true;
+scene.add(grid);
+
+// ─── ETIQUETAS DE PAREDES (HTML overlay) ─────────────────────────
+const labels = [
+  { text:'P1 (331cm)', pos: new THREE.Vector3(-0.3, RH/2, P1/2) },
+  { text:'P2 (237cm)', pos: new THREE.Vector3(P2/2,  RH+0.3, P1) },
+  { text:'P3 (251cm)', pos: new THREE.Vector3(P2+0.3, RH/2, P5+P3/2) },
+  { text:'P4 (159cm)', pos: new THREE.Vector3(P4/2,  -0.4, 0) },
+  { text:'P5 (80cm)',  pos: new THREE.Vector3(P4+0.3, RH/2, P5/2) },
+  { text:'P6 (78cm)',  pos: new THREE.Vector3(P4+P6/2, RH+0.3, P5) },
+];
+
+const overlay = document.createElement('div');
+overlay.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+document.body.appendChild(overlay);
+
+const labelEls = labels.map(l => {
+  const el = document.createElement('div');
+  el.textContent = l.text;
+  el.style.cssText = `position:absolute;background:rgba(0,0,0,.65);color:#fff;
+    font:bold 11px Arial;padding:3px 6px;border-radius:4px;white-space:nowrap;
+    border:1px solid rgba(255,255,255,.3);transform:translate(-50%,-50%);`;
+  overlay.appendChild(el);
+  return { el, pos: l.pos };
+});
+
+const rulerEls = rulerLabelData.map(l => {
+  const el = document.createElement('div');
+  el.textContent = l.text;
+  el.style.cssText = `position:absolute;color:#111;font:bold 9px Arial;
+    white-space:nowrap;transform:translate(-50%,-50%);pointer-events:none;`;
+  overlay.appendChild(el);
+  return { el, pos: l.pos };
+});
+
+const _v = new THREE.Vector3();
+function updateLabels(){
+  labelEls.forEach(({el, pos}) => {
+    _v.copy(pos).project(camera);
+    const x = (_v.x * 0.5 + 0.5) * innerWidth;
+    const y = (-_v.y * 0.5 + 0.5) * innerHeight;
+    if(_v.z < 1){
+      el.style.left = x+'px';
+      el.style.top  = y+'px';
+      el.style.display = 'block';
+    } else {
+      el.style.display = 'none';
+    }
+  });
+  rulerEls.forEach(({el, pos}) => {
+    _v.copy(pos).project(camera);
+    const x = (_v.x * 0.5 + 0.5) * innerWidth;
+    const y = (-_v.y * 0.5 + 0.5) * innerHeight;
+    el.style.left = x+'px';
+    el.style.top  = y+'px';
+    el.style.display = _v.z < 1 ? 'block' : 'none';
+  });
+}
+
+// ─── ETIQUETAS NUMERADAS DE MUEBLES ──────────────────────────────
+const _KD = 39*sc; // KD del KALLAX (ya declarado dentro de bloque local)
+const furnitureItems = [
+  { n:1,  name:'Ventana',           pos: new THREE.Vector3(_clX,             RH*0.55,              P1-TH)                  },
+  { n:2,  name:'Puerta',            pos: new THREE.Vector3(P4-TH*0.3,        210*sc*0.55,          P5/2)                   },
+  { n:3,  name:'Closet',            pos: new THREE.Vector3(TH/2+40*sc,       RH*0.45,              TH/2+30*sc)             },
+  { n:4,  name:'Cama',              pos: new THREE.Vector3(cnX,              52*sc,                cnZ)                    },
+  { n:5,  name:'Frazada/Almohadas', pos: new THREE.Vector3(cnX,              58*sc,                cnZ-cnW*0.25)           },
+  { n:6,  name:'Baúl',              pos: new THREE.Vector3(P2-TH/2-15*sc,   50*sc,                P1-TH/2-105*sc/2)       },
+  { n:7,  name:'KALLAX',            pos: new THREE.Vector3(TH/2+_KD/2,      38*sc,                P1-TH/2-105*sc-77*sc/2) },
+  { n:8,  name:'Lámpara escritorio', pos: new THREE.Vector3(TH/2+_KD/2,      (77*sc+0.5*sc)+20*sc, P1-TH/2-105*sc-77*sc/2)},
+  { n:9,  name:'Repisa',            pos: new THREE.Vector3(TH/2+10*sc,      155*sc+12*sc,         P1/2)                   },
+  { n:10, name:'Escritorio',        pos: new THREE.Vector3(P2-TH/2-24*sc,   75*sc+6*sc,           P5+50*sc+2*sc)          },
+  { n:11, name:'Silla',             pos: new THREE.Vector3(P2-TH/2-48*sc-2*sc, 80*sc,             P5+50*sc+2*sc)          },
+  { n:12, name:'TV LED 40"',        pos: new THREE.Vector3(P2-TH/2-3*sc,    110*sc+25*sc,         P5+P3/2)                },
+];
+
+const furnitureEls = furnitureItems.map(item => {
+  const el = document.createElement('div');
+  el.textContent = item.n;
+  el.style.cssText = `
+    position:absolute;
+    width:22px; height:22px;
+    background:rgba(230,80,30,0.92);
+    color:#fff; font:bold 12px Arial;
+    border-radius:50%; border:2px solid #fff;
+    display:flex; align-items:center; justify-content:center;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+    box-shadow:0 1px 4px rgba(0,0,0,.6);
+    line-height:1;
+    text-align:center;
+    padding-top:1px;
+  `;
+  overlay.appendChild(el);
+  return { el, pos: item.pos };
+});
+
+// ─── LEYENDA DE MUEBLES ───────────────────────────────────────────
+const legend = document.createElement('div');
+legend.style.cssText = `
+  position:absolute; bottom:16px; right:16px;
+  background:rgba(0,0,0,.72); color:#fff;
+  font:12px Arial; padding:10px 14px;
+  border-radius:8px; line-height:1.85;
+  border:1px solid rgba(255,255,255,.15);
+  pointer-events:none; max-width:220px;
+`;
+legend.innerHTML = furnitureItems.map(i =>
+  `<span style="display:inline-block;width:20px;height:20px;background:rgba(230,80,30,0.9);
+   border-radius:50%;text-align:center;line-height:20px;font-weight:bold;
+   font-size:11px;margin-right:6px;vertical-align:middle;">${i.n}</span>${i.name}`
+).join('<br>');
+document.body.appendChild(legend);
+
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene,camera);
+  updateLabels();
+  furnitureEls.forEach(({el, pos}) => {
+    _v.copy(pos).project(camera);
+    const x = (_v.x * 0.5 + 0.5) * innerWidth;
+    const y = (-_v.y * 0.5 + 0.5) * innerHeight;
+    el.style.left = x+'px';
+    el.style.top  = y+'px';
+    el.style.display = _v.z < 1 ? 'flex' : 'none';
+  });
+}
+animate();
+</script>
+</body>
+</html>
